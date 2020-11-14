@@ -1,0 +1,303 @@
+﻿@page "/"
+@inject IMatHelpers MatHelpers
+@inject HttpClient HttpClient
+@inject IMatToaster Toaster
+@inject IJSRuntime JSRuntime
+
+@if (showProgressBar)
+{
+    <MatProgressBar Style="position: absolute; top: 0; left: 0; right: 0;"></MatProgressBar>
+}
+
+<MatTabGroup @bind-ActiveIndex="@tabIndex">
+    <MatTab Label="Optimize Images">
+        <h2 style="text-align: center;">Optimize, resize, change type of Images</h2>
+
+        @*#region 1. Upload image/s *@
+        <MatFileUpload AllowMultiple="true"
+                       OnChange="UploadImagesBulkAsync"
+                       Label="Drop files here">
+        </MatFileUpload>
+
+        <br />
+        <div style="overflow-y: auto; height: 235px;">
+            <div class="mat-layout-grid">
+                <div class="mat-layout-grid-inner" style="text-align: center;">
+                    @foreach (var image in images)
+                    {
+                        <div title="Click to optimize" @onclick="e => ImageOnClickEvent(image)" class="mat-elevation-z3 mat-layout-grid-cell mat-layout-grid-cell-span-2 mat-layout-grid-cell-align-middle" style="cursor: pointer; height: 100%; width: 100%; display: grid; align-items: center; justify-content: center; min-height: 150px; padding: 5px;">
+                            <img src='data:image/png;jpeg;base64,@Convert.ToBase64String(image.Data)' style="max-width: 100%;" />
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+        @if (showImageTools)
+        {
+            <div class="mat-layout-grid">
+                <div class="mat-layout-grid-inner">
+                    <div class="mat-layout-grid-cell mat-layout-grid-cell-span-12" style="text-align: right">
+                        <MatButton Raised="true" OnClick="e => CloseImage()">Close</MatButton>
+                    </div>
+                    <div class="mat-layout-grid-cell mat-layout-grid-cell-span-12">
+                        <MatSlider Pin="true" TValue="int" Label="Image Quality" @bind-Value="@CurrentImage.Quality" ValueMin="0" ValueMax="100"></MatSlider>
+                    </div>
+                </div>
+            </div>
+            <div class="mat-layout-grid">
+                <div class="mat-layout-grid-inner" style="text-align: center;">
+                    <div class="mat-elevation-z3 mat-layout-grid-cell mat-layout-grid-cell-span-12 mat-layout-grid-cell-align-middle" style="display: grid; align-items: center; justify-content: center; padding: 30px;">
+                        <img src='data:image/png;jpeg;base64,@Convert.ToBase64String(CurrentImage.Data)' style="max-width: 100%;" />
+                    </div>
+                </div>
+            </div>
+        }
+    </MatTab>
+    <MatTab Label="Generate SVG">
+        <h2 style="text-align: center;">Generate SVG from image</h2>
+
+        @*2. Show image/s and tools that are available for optimization*@
+
+        @*<MatFileUpload AllowMultiple="true"
+                       OnChange="@CreateSvgImageAsync"
+                       Label="Drop files here to create SVG">
+        </MatFileUpload>*@
+
+        <div>
+            @if (svgName != null)
+            {
+                <a href="@HttpHelper.NodeUrlFormat(HttpHelper.UrlCombine("api", "Graphics", "GetSvgFileAsync").AppendQuery("fileName", svgName))" target="_blank">Download Svg</a>
+            }
+        </div>
+    </MatTab>
+    <MatTab Label="Test Optimize Images">
+        <h2 style="text-align: center;">Test Optimize, resize, change type of Images</h2>
+
+        @*#region 1. Upload image/s *@
+        <MatFileUpload AllowMultiple="true"
+                       OnChange="TestUploadImagesBulkAsync"
+                       Label="Drop files here">
+        </MatFileUpload>
+
+        <br />
+        <div style="overflow-y: auto; height: 235px;">
+            <div class="mat-layout-grid">
+                <div class="mat-layout-grid-inner" style="text-align: center;">
+                    @foreach (var image in images)
+                    {
+                        <div title="Click to optimize" @onclick="e => ImageOnClickEvent(image)" class="mat-elevation-z3 mat-layout-grid-cell mat-layout-grid-cell-span-2 mat-layout-grid-cell-align-middle" style="cursor: pointer; height: 100%; width: 100%; display: grid; align-items: center; justify-content: center; min-height: 150px; padding: 5px;">
+                            <img src='data:image/png;jpeg;base64,@Convert.ToBase64String(image.Data)' style="max-width: 100%;" />
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </MatTab>
+</MatTabGroup>
+
+@code {
+    private int tabIndex = 0;
+    private bool showImageTools = false;
+    private bool showProgressBar = false;
+    private string svgName;
+    private List<ImageDetailsShort> images = new List<ImageDetailsShort>();
+    private ImageDetails CurrentImage = new ImageDetails();
+
+    private async Task SetItemAsync<T>(string key, T value)
+    {
+        var valueAsJson = JsonHelper.Serialize(value);
+
+        await JSRuntime.InvokeVoidAsync(nameof(SetItemAsync), key, valueAsJson);
+    }
+
+    private async Task<T> GetItemAsync<T>(string key)
+    {
+        var valueAsString = await JSRuntime.InvokeAsync<string>(nameof(GetItemAsync), key);
+        var value = JsonHelper.Deserialize<T>(valueAsString);
+
+        return value;
+    }
+
+    public void CloseImage()
+    {
+        showImageTools = false;
+    }
+
+    private async Task ImageOnClickEvent(ImageDetailsShort imageDetails)
+    {
+        CurrentImage = await GetOriginalImageQualityAsync(imageDetails);
+        showImageTools = true;
+    }
+
+    private void AddToast(string message, MatToastType matToastType)
+    {
+        Toaster.Add(message, matToastType);
+    }
+
+    private async Task SetImageDetailsListToLocalStorageAsync(IMatFileUploadEntry[] files)
+    {
+        showProgressBar = true;
+
+        foreach (var file in files)
+        {
+            var fileBytes = await MatHelpers.ConvertImageToByteArrayAsync(file);
+
+            if (fileBytes != null && fileBytes.Any())
+            {
+                var imageDetails = new ImageDetails
+                {
+                    Id = Guid.NewGuid(),
+                    Data = fileBytes,
+                    Type = file.Type,
+                    Name = file.Name,
+                    Size = file.Size
+                };
+
+                await SetItemAsync(imageDetails.Id.ToString(), imageDetails);
+
+                AddToast($"\"{file.Name}\" image uploaded", MatToastType.Success);
+            }
+        }
+
+        showProgressBar = false;
+    }
+
+    private async Task<List<ImageDetails>> GetImageDetailsListAsync(IMatFileUploadEntry[] files)
+    {
+        showProgressBar = true;
+
+        var imageDetailsList = new List<ImageDetails>();
+
+        foreach (var file in files)
+        {
+            var fileBytes = await MatHelpers.ConvertImageToByteArrayAsync(file);
+
+            if (fileBytes != null && fileBytes.Any())
+            {
+                var imageDetails = new ImageDetails
+                {
+                    Id = Guid.NewGuid(),
+                    Data = fileBytes,
+                    Type = file.Type,
+                    Name = file.Name,
+                    Size = file.Size
+                };
+
+                imageDetailsList.Add(imageDetails);
+
+                await SetItemAsync(imageDetails.Id.ToString(), imageDetails);
+
+                AddToast($"\"{file.Name}\" image uploaded", MatToastType.Success);
+            }
+        }
+
+        showProgressBar = false;
+
+        return imageDetailsList;
+    }
+
+    private async Task UploadImagesBulkAsync(IMatFileUploadEntry[] files)
+    {
+        showProgressBar = true;
+        var list = await GetImageDetailsListAsync(files);
+
+        foreach (var image in list)
+        {
+            images.Add(new ImageDetailsShort { Id = image.Id, Data = image.Data });
+        }
+
+        showProgressBar = false;
+    }
+
+    //TODO: to make single image optimizations. To calculate current quality level
+    private async Task<ImageDetails> GetOriginalImageQualityAsync(ImageDetailsShort imageDetails)
+    {
+        var image = await GetItemAsync<ImageDetails>(imageDetails.Id.ToString());
+        var path = HttpHelper.UrlCombine("api", "Graphics", "GetOriginalImageQualityAsync");
+        var httpResponse = await HttpClient.PostAsync<ImageDetails, ImageDetails>(path, image);
+
+        Toaster.Add(httpResponse.HttpResponseModel.Message, MatToastType.Warning);
+
+        return httpResponse.Content;
+    }
+
+    //private async Task UploadImagesBulkAsync(IMatFileUploadEntry[] files)
+    //{
+    //    var imageDetailsList = await GetImageDetailsListAsync(files);
+
+    //    var path = HttpHelper.UrlCombine("api", "Graphics", "GetImageAsBase64StringAsync");
+    //    var httpResponse = await HttpClient.PostAsync<IEnumerable<string>, IEnumerable<ImageDetails>>(path, imageDetailsList);
+
+    //    if (httpResponse.Content != null)
+    //    {
+    //        foreach (var image in httpResponse.Content)
+    //        {
+    //            images.Add(image);
+    //        }
+    //    }
+    //}
+
+    //private async Task CreateSvgImageAsync(IMatFileUploadEntry[] files)
+    //{
+    //    await GetImageDetailsListAsync(files);
+
+    //    var path = HttpHelper.UrlCombine("api", "Graphics", "CreateSvgFileAsync");
+    //    var svgNameResult = await HttpClient.PostAsync<string, byte[]>(path, imageDetailsList.First().Data);
+
+    //    if (svgNameResult.Content != null)
+    //    {
+    //        AddToast($"\"{svgNameResult.Content}\" svg image generated", MatToastType.Success);
+
+    //        svgName = svgNameResult.Content;
+    //    }
+    //    else
+    //    {
+    //        AddToast($"Failed to generate svg image", MatToastType.Danger);
+    //    }
+    //}
+
+    private async Task TestUploadImagesBulkAsync(IMatFileUploadEntry[] files)
+    {
+        showProgressBar = true;
+
+        await TestGetImageDetailsListAsync(files);
+
+        showProgressBar = false;
+    }
+
+    private async Task TestGetImageDetailsListAsync(IMatFileUploadEntry[] files)
+    {
+        showProgressBar = true;
+
+        foreach (var file in files)
+        {
+            var fileBytes = await MatHelpers.ConvertImageToByteArrayAsync(file);
+            var cloneList = new List<ImageDetails>();
+            if (fileBytes != null && fileBytes.Any())
+            {
+                for (var i = 10; i <= 100; i += 10)
+                {
+                    cloneList.Add(new ImageDetails
+                    {
+                        Id = Guid.NewGuid(),
+                        Data = fileBytes,
+                        Type = file.Type,
+                        Name = file.Name,
+                        Size = file.Size,
+                        Quality = i
+                    });
+                }
+
+                var path = HttpHelper.UrlCombine("api", "Graphics", "GetImageAsOptimizedBase64StringAsync");
+
+                foreach (var image in cloneList)
+                {
+                    var result = await HttpClient.PostAsync<string, ImageDetails>(path, image);
+                    images.Add(new ImageDetailsShort { Data = Convert.FromBase64String(result.Content) });
+                }
+            }
+        }
+
+        showProgressBar = false;
+    }
+}
